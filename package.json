@@ -1,18 +1,18 @@
 {
-  "name": "dev.sleightly.template",
-  "displayName": "JS-Template",
+  "name": "dev.sleightly.clipfocus",
+  "displayName": "JS-ClipFocus",
   "version": "0.0.0",
-  "description": "A VPM Package Template",
-  "url": "https://github.com/JustSleightly/JS-Template",
+  "description": "Directs Animation Window focus swiftly by clicking clips inside the Animator Window",
+  "url": "https://github.com/JustSleightly/ClipFocus",
   "vpmDependencies": {
-    "com.vrchat.avatars": "^3.8.0"
+    "com.vrchat.avatars": "^3.10.0"
   },
   "type": "tool",
   "keywords": [
     "JustSleightly",
     "Sleightly",
     "VRChat",
-    "Template"
+    "ClipFocus"
   ],
   "author": {
     "name": "JustSleightly",

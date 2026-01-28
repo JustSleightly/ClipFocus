@@ -11,5 +11,5 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-Written by Steven Nguyen <just@sleightly.dev>, January 2023
+Written by Steven Nguyen <just@sleightly.dev>, January 2026
 https://terms.sleightly.dev/
