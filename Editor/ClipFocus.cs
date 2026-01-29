@@ -3,13 +3,14 @@ using UnityEngine;
 using UnityEditor;
 using UnityEditor.Animations;
 using System.Reflection;
+using System.Collections.Generic;
 
 namespace JustSleightly.ClipFocus
 {
     /// <summary>
     /// Automatically focuses the Animation Window on the selected AnimatorState's clip
     /// or BlendTree child clip while maintaining the last selected GameObject as the preview target.
-    /// Respects the Animation Window's lock state.
+    /// Respects each Animation Window's lock state and supports multiple Animation windows.
     /// </summary>
     [InitializeOnLoad]
     public class ClipFocus : EditorWindow
@@ -153,10 +154,29 @@ namespace JustSleightly.ClipFocus
                 Debug.Log($"<color=yellow>[ClipFocus]</color> {message}");
         }
 
-        static AnimationWindow GetAnimationWindowSafe()
+        /// <summary>
+        /// Get all open Animation windows without creating or focusing any
+        /// </summary>
+        static AnimationWindow[] GetAllAnimationWindows()
         {
-            AnimationWindow[] windows = Resources.FindObjectsOfTypeAll<AnimationWindow>();
-            return windows.Length > 0 ? windows[0] : null;
+            return Resources.FindObjectsOfTypeAll<AnimationWindow>();
+        }
+
+        /// <summary>
+        /// Get all unlocked Animation windows
+        /// </summary>
+        static List<AnimationWindow> GetUnlockedAnimationWindows()
+        {
+            List<AnimationWindow> unlocked = new List<AnimationWindow>();
+            AnimationWindow[] allWindows = GetAllAnimationWindows();
+
+            foreach (AnimationWindow window in allWindows)
+            {
+                if (!IsAnimationWindowLocked(window))
+                    unlocked.Add(window);
+            }
+
+            return unlocked;
         }
 
         static bool IsAnimationWindowLocked(AnimationWindow window)
@@ -210,22 +230,27 @@ namespace JustSleightly.ClipFocus
             AnimationClip clip = selection.motion as AnimationClip;
             if (!clip) return;
 
-            // Check lock state BEFORE making any selection changes
-            AnimationWindow window = GetAnimationWindowSafe();
-            if (window == null) return;
-
-            if (IsAnimationWindowLocked(window))
+            // Get all unlocked windows
+            List<AnimationWindow> unlockedWindows = GetUnlockedAnimationWindows();
+            if (unlockedWindows.Count == 0)
             {
-                LogDebug("Animation Window is locked - skipping state focus");
+                LogDebug("All Animation Windows are locked - skipping state focus");
                 return;
             }
 
-            LogDebug($"AnimatorState selected: {selection.name} -> Clip: {clip.name}");
+            LogDebug($"AnimatorState selected: {selection.name} -> Clip: {clip.name} (applying to {unlockedWindows.Count} window(s))");
 
-            // Set preview context and assign clip
+            // Set preview context
             Selection.activeGameObject = _lastGameObject;
-            window.animationClip = clip;
-            Selection.SetActiveObjectWithContext(selection, window);
+
+            // Apply clip to ALL unlocked windows
+            foreach (AnimationWindow window in unlockedWindows)
+            {
+                window.animationClip = clip;
+            }
+
+            // Use first unlocked window for selection context
+            Selection.SetActiveObjectWithContext(selection, unlockedWindows[0]);
         }
 
         static void ClipSelected(AnimationClip selection)
@@ -253,30 +278,31 @@ namespace JustSleightly.ClipFocus
 
             if (!clipToProcess || !_lastGameObject) return;
 
-            // Check lock state BEFORE making any selection changes
-            AnimationWindow window = GetAnimationWindowSafe();
-            if (window == null) return;
-
-            if (IsAnimationWindowLocked(window))
+            // Get all unlocked windows
+            List<AnimationWindow> unlockedWindows = GetUnlockedAnimationWindows();
+            if (unlockedWindows.Count == 0)
             {
-                LogDebug("Animation Window is locked - skipping clip restore");
+                LogDebug("All Animation Windows are locked - skipping clip restore");
                 return;
             }
 
-            LogDebug($"Restoring preview context for: {clipToProcess.name}");
+            LogDebug($"Restoring preview context for: {clipToProcess.name} (applying to {unlockedWindows.Count} window(s))");
 
             // CRITICAL ORDER for recordable state:
             // 1. Set GameObject context first
             Selection.activeGameObject = _lastGameObject;
 
-            // 2. GetWindow triggers internal Unity state updates for recordable
-            //    Note: This may bring Animation window tab to front - known limitation
-            window = GetWindow<AnimationWindow>();
+            // 2. Focus each unlocked window to trigger internal state update for recordable
+            //    Then assign the clip to that window
+            //    Note: Only the last-focused window will retain full context for locking
+            //    This is a Unity limitation - single window use works perfectly
+            foreach (AnimationWindow window in unlockedWindows)
+            {
+                window.Focus();
+                window.animationClip = clipToProcess;
+            }
 
-            // 3. Assign clip to window
-            window.animationClip = clipToProcess;
-
-            // 4. Set clip as active selection for inspector
+            // 3. Set clip as active selection for inspector
             Selection.activeObject = clipToProcess;
         }
     }
