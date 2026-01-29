@@ -7,58 +7,51 @@ using System.Collections.Generic;
 
 namespace JustSleightly.ClipFocus
 {
-    /// <summary>
-    /// Automatically focuses the Animation Window on the selected AnimatorState's clip
-    /// or BlendTree child clip while maintaining the last selected GameObject as the preview target.
-    /// Respects each Animation Window's lock state and supports multiple Animation windows.
-    /// </summary>
     [InitializeOnLoad]
     public class ClipFocus : EditorWindow
     {
-        // ═══════════════════════════════════════════════════════════════════
-        // CONSTANTS
-        // ═══════════════════════════════════════════════════════════════════
+        #region Fields
 
-        const string PREF_DEBUG_LOGS = "ClipFocus_DebugLogs";
-        const string MENU_DEBUG_LOGS = "JustSleightly/ClipFocus/Enable Debug Logs";
+        const string PrefDebugLogs = "ClipFocus_DebugLogs";
+        const string MenuDebugLogs = "JustSleightly/ClipFocus/Enable Debug Logs";
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STATIC FIELDS
-        // ═══════════════════════════════════════════════════════════════════
+        static GameObject _lastGameObject;      // Cached GameObject for animation preview context
+        static AnimationClip _pendingClip;      // Queued clip for deferred BlendTree processing
+        static AnimationClip _lastProcessedClip; // Track last processed clip for focus restore
+        static AnimationWindow _lastProcessedWindow; // Track which window we processed the clip on
+        static bool _lastProcessedWindowWasLocked; // Track previous lock state to detect unlock events
+        static bool _debugLogsEnabled;          // User-togglable debug output
+        static bool _isProcessing;              // Re-entry guard to prevent self-triggered selection handling
+        static EditorWindow _lastFocusedWindow; // Track focus changes
 
-        // Store the last selected GameObject to use as animation preview target
-        static GameObject _lastGameObject;
-
-        // Track pending clip restoration for BlendTree timing
-        static AnimationClip _pendingClip;
-
-        // Reflection cache for lock state detection
+        // Reflection cache for accessing AnimationWindow's internal lock state
         static FieldInfo _lockTrackerField;
         static MemberInfo _isLockedMember;
         static bool _isLockedIsProperty;
         static bool _reflectionInitialized;
         static bool _reflectionSuccessful;
 
-        // Debug logging toggle (persisted via EditorPrefs)
-        static bool _debugLogsEnabled;
+        // Reflection for AnimationWindow's OnSelectionChange method
+        static MethodInfo _onSelectionChangeMethod;
+        static bool _onSelectionChangeFound;
 
-        // ═══════════════════════════════════════════════════════════════════
-        // MENU ITEMS
-        // ═══════════════════════════════════════════════════════════════════
+        #endregion
 
-        [MenuItem(MENU_DEBUG_LOGS, false)]
+        #region Menu Items
+
+        [MenuItem(MenuDebugLogs, false)]
         private static void ToggleDebugLogs()
         {
             _debugLogsEnabled = !_debugLogsEnabled;
-            EditorPrefs.SetBool(PREF_DEBUG_LOGS, _debugLogsEnabled);
-            Menu.SetChecked(MENU_DEBUG_LOGS, _debugLogsEnabled);
+            EditorPrefs.SetBool(PrefDebugLogs, _debugLogsEnabled);
+            Menu.SetChecked(MenuDebugLogs, _debugLogsEnabled);
             Debug.Log($"<color=yellow>[ClipFocus]</color> Debug logs {(_debugLogsEnabled ? "enabled" : "disabled")}");
         }
 
-        [MenuItem(MENU_DEBUG_LOGS, true)]
+        [MenuItem(MenuDebugLogs, true)]
         private static bool ToggleDebugLogsValidate()
         {
-            Menu.SetChecked(MENU_DEBUG_LOGS, _debugLogsEnabled);
+            Menu.SetChecked(MenuDebugLogs, _debugLogsEnabled);
             return true;
         }
 
@@ -69,27 +62,29 @@ namespace JustSleightly.ClipFocus
             Application.OpenURL("https://github.com/JustSleightly/ClipFocus");
         }
 
-        // ═══════════════════════════════════════════════════════════════════
-        // INITIALIZATION
-        // ═══════════════════════════════════════════════════════════════════
+        #endregion
+
+        #region Initialization
 
         static ClipFocus()
         {
-            // Load debug preference from EditorPrefs (persists across projects)
-            _debugLogsEnabled = EditorPrefs.GetBool(PREF_DEBUG_LOGS, false);
-
-            Selection.selectionChanged += UpdateAnimation;
-            EditorApplication.update += ProcessPendingClip;
-            InitializeReflection();
-            LogDebug("Initialized and registered selection callback");
+            _debugLogsEnabled = EditorPrefs.GetBool(PrefDebugLogs, false);
+            Selection.selectionChanged += OnSelectionChanged;
+            EditorApplication.update += OnEditorUpdate;
+            InitializeLockReflection();
+            InitializeOnSelectionChangeReflection();
+            LogDebug("Initialized");
         }
 
-        static void InitializeReflection()
+        /// <summary>
+        /// Sets up reflection to access AnimationWindow's internal m_LockTracker.isLocked
+        /// Required because Unity doesn't expose the lock state publicly in this version
+        /// </summary>
+        static void InitializeLockReflection()
         {
             if (_reflectionInitialized) return;
             _reflectionInitialized = true;
 
-            // Step 1: Get m_LockTracker field from AnimationWindow
             _lockTrackerField = typeof(AnimationWindow).GetField(
                 "m_LockTracker",
                 BindingFlags.NonPublic | BindingFlags.Instance
@@ -97,56 +92,68 @@ namespace JustSleightly.ClipFocus
 
             if (_lockTrackerField == null)
             {
-                Debug.LogWarning("<color=yellow>[ClipFocus]</color> Could not find m_LockTracker field");
+                Debug.LogWarning("<color=yellow>[ClipFocus]</color> Could not find m_LockTracker field - lock detection disabled");
                 return;
             }
 
-            System.Type lockTrackerType = _lockTrackerField.FieldType;
-            LogDebug($"Found m_LockTracker field, type: {lockTrackerType.FullName}");
+            System.Type trackerType = _lockTrackerField.FieldType;
 
-            // Step 2: Try to find isLocked - check multiple access patterns
-            _isLockedMember = lockTrackerType.GetProperty("isLocked", BindingFlags.Public | BindingFlags.Instance);
+            _isLockedMember = trackerType.GetProperty("isLocked", BindingFlags.Public | BindingFlags.Instance)
+                ?? trackerType.GetProperty("isLocked", BindingFlags.NonPublic | BindingFlags.Instance)
+                ?? (MemberInfo)trackerType.GetField("isLocked", BindingFlags.Public | BindingFlags.Instance)
+                ?? trackerType.GetField("m_IsLocked", BindingFlags.NonPublic | BindingFlags.Instance);
+
             if (_isLockedMember != null)
             {
-                _isLockedIsProperty = true;
+                _isLockedIsProperty = _isLockedMember is PropertyInfo;
                 _reflectionSuccessful = true;
-                LogDebug("Found isLocked as public property");
-                return;
+                LogDebug($"Lock reflection initialized ({_isLockedMember.MemberType}: {_isLockedMember.Name})");
             }
-
-            _isLockedMember = lockTrackerType.GetProperty("isLocked", BindingFlags.NonPublic | BindingFlags.Instance);
-            if (_isLockedMember != null)
+            else
             {
-                _isLockedIsProperty = true;
-                _reflectionSuccessful = true;
-                LogDebug("Found isLocked as non-public property");
-                return;
+                Debug.LogWarning("<color=yellow>[ClipFocus]</color> Could not find isLocked member - lock detection disabled");
             }
-
-            _isLockedMember = lockTrackerType.GetField("isLocked", BindingFlags.Public | BindingFlags.Instance);
-            if (_isLockedMember != null)
-            {
-                _isLockedIsProperty = false;
-                _reflectionSuccessful = true;
-                LogDebug("Found isLocked as public field");
-                return;
-            }
-
-            _isLockedMember = lockTrackerType.GetField("m_IsLocked", BindingFlags.NonPublic | BindingFlags.Instance);
-            if (_isLockedMember != null)
-            {
-                _isLockedIsProperty = false;
-                _reflectionSuccessful = true;
-                LogDebug("Found m_IsLocked as non-public field");
-                return;
-            }
-
-            Debug.LogWarning("<color=yellow>[ClipFocus]</color> Could not find isLocked/m_IsLocked");
         }
 
-        // ═══════════════════════════════════════════════════════════════════
-        // UTILITIES
-        // ═══════════════════════════════════════════════════════════════════
+        /// <summary>
+        /// Sets up reflection to access AnimationWindow's OnSelectionChange method
+        /// Used to force the window to update its internal GameObject reference
+        /// </summary>
+        static void InitializeOnSelectionChangeReflection()
+        {
+            _onSelectionChangeMethod = typeof(AnimationWindow).GetMethod(
+                "OnSelectionChange", 
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
+            );
+
+            if (_onSelectionChangeMethod != null)
+            {
+                _onSelectionChangeFound = true;
+                LogDebug("Found OnSelectionChange method");
+            }
+            else
+            {
+                Debug.LogWarning("<color=yellow>[ClipFocus]</color> Could not find OnSelectionChange method - BlendTree clip context restore disabled");
+            }
+        }
+
+        #endregion
+
+        #region Update Loop
+
+        /// <summary>
+        /// Combined editor update loop for processing pending clips, monitoring focus, and monitoring lock state
+        /// </summary>
+        static void OnEditorUpdate()
+        {
+            ProcessPendingClip();
+            MonitorWindowFocus();
+            MonitorLockStateChanges();
+        }
+
+        #endregion
+
+        #region Utilities
 
         static void LogDebug(string message)
         {
@@ -154,32 +161,36 @@ namespace JustSleightly.ClipFocus
                 Debug.Log($"<color=yellow>[ClipFocus]</color> {message}");
         }
 
-        /// <summary>
-        /// Get all open Animation windows without creating or focusing any
-        /// </summary>
         static AnimationWindow[] GetAllAnimationWindows()
         {
             return Resources.FindObjectsOfTypeAll<AnimationWindow>();
         }
 
-        /// <summary>
-        /// Get all unlocked Animation windows
-        /// </summary>
         static List<AnimationWindow> GetUnlockedAnimationWindows()
         {
             List<AnimationWindow> unlocked = new List<AnimationWindow>();
-            AnimationWindow[] allWindows = GetAllAnimationWindows();
-
-            foreach (AnimationWindow window in allWindows)
+            foreach (AnimationWindow window in GetAllAnimationWindows())
             {
-                if (!IsAnimationWindowLocked(window))
+                if (!IsWindowLocked(window))
                     unlocked.Add(window);
             }
-
             return unlocked;
         }
 
-        static bool IsAnimationWindowLocked(AnimationWindow window)
+        /// <summary>
+        /// Gets the first unlocked Animation window, or null if all are locked
+        /// </summary>
+        static AnimationWindow GetFirstUnlockedAnimationWindow()
+        {
+            foreach (AnimationWindow window in GetAllAnimationWindows())
+            {
+                if (!IsWindowLocked(window))
+                    return window;
+            }
+            return null;
+        }
+
+        static bool IsWindowLocked(AnimationWindow window)
         {
             if (!_reflectionSuccessful || window == null)
                 return false;
@@ -187,88 +198,262 @@ namespace JustSleightly.ClipFocus
             object lockTracker = _lockTrackerField.GetValue(window);
             if (lockTracker == null) return false;
 
-            bool isLocked;
             if (_isLockedIsProperty)
-                isLocked = (bool)((PropertyInfo)_isLockedMember).GetValue(lockTracker);
+                return (bool)((PropertyInfo)_isLockedMember).GetValue(lockTracker);
             else
-                isLocked = (bool)((FieldInfo)_isLockedMember).GetValue(lockTracker);
-
-            return isLocked;
+                return (bool)((FieldInfo)_isLockedMember).GetValue(lockTracker);
         }
 
-        // ═══════════════════════════════════════════════════════════════════
-        // SELECTION ROUTING
-        // ═══════════════════════════════════════════════════════════════════
-
-        static void UpdateAnimation()
+        /// <summary>
+        /// Checks if the currently focused window is an Animator-related window
+        /// Used to determine if clip selection came from Animator (BlendTree) vs Project window
+        /// </summary>
+        static bool IsAnimatorWindowFocused()
         {
+            EditorWindow focused = focusedWindow;
+            if (focused == null) return false;
+
+            string typeName = focused.GetType().Name;
+            string fullTypeName = focused.GetType().FullName;
+
+            LogDebug($"Focused window type: {fullTypeName ?? typeName}");
+
+            // Check for Animator window type (UnityEditor.Graphs.AnimatorControllerTool)
+            return typeName.Contains("Animator") || (fullTypeName != null && fullTypeName.Contains("Animator"));
+        }
+
+        /// <summary>
+        /// Forces the Animation window to update its internal GameObject reference
+        /// by calling OnSelectionChange via reflection
+        /// </summary>
+        static void ForceAnimationWindowStateUpdate(AnimationWindow window)
+        {
+            if (!_onSelectionChangeFound || window == null) return;
+
+            try
+            {
+                LogDebug("Calling OnSelectionChange on Animation window");
+                _onSelectionChangeMethod.Invoke(window, null);
+            }
+            catch (System.Exception e)
+            {
+                LogDebug($"Error forcing state update: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Refreshes the Animation window's GameObject context and clip
+        /// Used for focus changes and lock state changes during "fragile" state
+        /// </summary>
+        static void RefreshWindowContext(AnimationWindow window)
+        {
+            if (window == null || _lastProcessedClip == null || _lastGameObject == null) return;
+            
+            LogDebug("Refreshing window context");
+            
+            _isProcessing = true;
+            try
+            {
+                // Temporarily make GameObject the active selection
+                Selection.activeGameObject = _lastGameObject;
+                
+                // Call OnSelectionChange so window registers the GameObject
+                ForceAnimationWindowStateUpdate(window);
+                
+                // Re-assign our clip to the window (GameObject context is now locked in)
+                LogDebug($"Re-assigning clip: {_lastProcessedClip.name}");
+                window.animationClip = _lastProcessedClip;
+                
+                // Restore clip selection with context
+                Selection.SetActiveObjectWithContext(_lastProcessedClip, _lastGameObject);
+            }
+            finally
+            {
+                _isProcessing = false;
+            }
+        }
+
+        #endregion
+
+        #region Monitoring
+
+        /// <summary>
+        /// Monitors window focus changes and refreshes Animation window state when it regains focus
+        /// Only applies to the specific window where we processed the BlendTree clip
+        /// Respects locked state - won't refresh locked windows
+        /// </summary>
+        static void MonitorWindowFocus()
+        {
+            EditorWindow currentFocused = focusedWindow;
+            
+            // Only act on focus changes
+            if (currentFocused == _lastFocusedWindow) return;
+            
+            _lastFocusedWindow = currentFocused;
+
+            // Check if THIS is the specific Animation window we processed AND we have a clip to restore
+            // Combined type check and cast to avoid warning
+            if (currentFocused is AnimationWindow animWindow && 
+                currentFocused == _lastProcessedWindow && 
+                _lastProcessedClip != null && 
+                _lastGameObject != null)
+            {
+                // Respect locked state - don't refresh if window is now locked
+                if (IsWindowLocked(animWindow))
+                {
+                    LogDebug("Animation window is locked - skipping refresh");
+                    return;
+                }
+                
+                // Only restore if selection is still the clip (user hasn't changed it)
+                if (Selection.activeObject == _lastProcessedClip)
+                {
+                    LogDebug("Animation window focused - refreshing context");
+                    RefreshWindowContext(animWindow);
+                }
+                else
+                {
+                    // User changed selection - clear our tracking
+                    LogDebug("User changed selection - clearing BlendTree clip tracking");
+                    _lastProcessedClip = null;
+                    _lastProcessedWindow = null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Monitors lock state changes on the tracked window
+        /// Refreshes context immediately when window is unlocked during "fragile" state
+        /// </summary>
+        static void MonitorLockStateChanges()
+        {
+            // Only monitor if we're tracking a window with a processed clip
+            if (_lastProcessedWindow == null || _lastProcessedClip == null || _lastGameObject == null)
+            {
+                _lastProcessedWindowWasLocked = false;
+                return;
+            }
+
+            bool isCurrentlyLocked = IsWindowLocked(_lastProcessedWindow);
+            
+            // Detect unlock event: was locked, now unlocked
+            if (_lastProcessedWindowWasLocked && !isCurrentlyLocked)
+            {
+                LogDebug("Detected window unlock - refreshing context to maintain recordable state");
+                
+                // Only refresh if selection is still our clip
+                if (Selection.activeObject == _lastProcessedClip)
+                {
+                    RefreshWindowContext(_lastProcessedWindow);
+                }
+            }
+            
+            // Update tracked lock state
+            _lastProcessedWindowWasLocked = isCurrentlyLocked;
+        }
+
+        #endregion
+
+        #region Selection Handling
+
+        static void OnSelectionChanged()
+        {
+            // Skip if we're currently processing to avoid re-entry from our own selection changes
+            if (_isProcessing) return;
+
             object selection = EditorUtility.InstanceIDToObject(Selection.activeInstanceID);
             if (selection == null) return;
 
-            GameObjectSelected(selection as GameObject);
-            StateSelected(selection as AnimatorState);
-            ClipSelected(selection as AnimationClip);
+            if (selection is GameObject go)
+                HandleGameObjectSelected(go);
+            else if (selection is AnimatorState state)
+                HandleStateSelected(state);
+            else if (selection is AnimationClip clip)
+                HandleClipSelected(clip);
         }
 
-        // ═══════════════════════════════════════════════════════════════════
-        // SELECTION HANDLERS
-        // ═══════════════════════════════════════════════════════════════════
-
-        static void GameObjectSelected(GameObject selection)
+        /// <summary>
+        /// Caches selected GameObjects to use as animation preview target
+        /// </summary>
+        static void HandleGameObjectSelected(GameObject selection)
         {
-            if (!selection) return;
-
             _lastGameObject = selection;
-            LogDebug($"GameObject selected: {selection.name}");
+            LogDebug($"GameObject cached: {selection.name}");
+            
+            // Clear BlendTree clip tracking when user selects GameObject
+            // This exits the "fragile" state and stops continuous re-assignment
+            _lastProcessedClip = null;
+            _lastProcessedWindow = null;
+            _lastProcessedWindowWasLocked = false;
         }
 
-        static void StateSelected(AnimatorState selection)
+        /// <summary>
+        /// Handles AnimatorState selection from Animator window
+        /// Immediately applies clip to all unlocked Animation windows
+        /// </summary>
+        static void HandleStateSelected(AnimatorState selection)
         {
-            if (!selection) return;
             if (!HasOpenInstances<AnimationWindow>()) return;
 
             AnimationClip clip = selection.motion as AnimationClip;
             if (!clip) return;
 
-            // Get all unlocked windows
             List<AnimationWindow> unlockedWindows = GetUnlockedAnimationWindows();
             if (unlockedWindows.Count == 0)
             {
-                LogDebug("All Animation Windows are locked - skipping state focus");
+                LogDebug("All windows locked - skipping");
                 return;
             }
 
-            LogDebug($"AnimatorState selected: {selection.name} -> Clip: {clip.name} (applying to {unlockedWindows.Count} window(s))");
+            LogDebug($"State: {selection.name} -> {clip.name} ({unlockedWindows.Count} window(s))");
 
-            // Set preview context
-            Selection.activeGameObject = _lastGameObject;
-
-            // Apply clip to ALL unlocked windows
-            foreach (AnimationWindow window in unlockedWindows)
+            _isProcessing = true;
+            try
             {
-                window.animationClip = clip;
-            }
+                Selection.activeGameObject = _lastGameObject;
 
-            // Use first unlocked window for selection context
-            Selection.SetActiveObjectWithContext(selection, unlockedWindows[0]);
+                foreach (AnimationWindow window in unlockedWindows)
+                    window.animationClip = clip;
+
+                Selection.SetActiveObjectWithContext(selection, unlockedWindows[0]);
+            }
+            finally
+            {
+                _isProcessing = false;
+            }
         }
 
-        static void ClipSelected(AnimationClip selection)
+        /// <summary>
+        /// Handles AnimationClip selection from BlendTree (Animator window only)
+        /// Queues for deferred processing to achieve recordable state
+        /// Ignores clips selected from Project window
+        /// </summary>
+        static void HandleClipSelected(AnimationClip selection)
         {
-            if (!selection) return;
             if (!HasOpenInstances<AnimationWindow>()) return;
             if (!_lastGameObject) return;
 
-            LogDebug($"AnimationClip selected: {selection.name}");
+            // Only process clips selected from Animator window (BlendTree children)
+            // Ignore clips selected from Project window
+            if (!IsAnimatorWindowFocused())
+            {
+                LogDebug($"Clip selected outside Animator window - ignoring: {selection.name}");
+                return;
+            }
 
-            // Queue clip for next frame to maintain recordable state timing
+            LogDebug($"Clip queued: {selection.name}");
             _pendingClip = selection;
         }
 
-        // ═══════════════════════════════════════════════════════════════════
-        // DEFERRED PROCESSING
-        // ═══════════════════════════════════════════════════════════════════
+        #endregion
 
+        #region Deferred Processing
+
+        /// <summary>
+        /// Processes queued BlendTree clips on EditorApplication.update
+        /// This timing is critical - faster methods fail to achieve recordable state
+        /// Only applies to one window since Focus() is required and breaks multi-window recording
+        /// </summary>
         static void ProcessPendingClip()
         {
             if (!_pendingClip) return;
@@ -278,33 +463,47 @@ namespace JustSleightly.ClipFocus
 
             if (!clipToProcess || !_lastGameObject) return;
 
-            // Get all unlocked windows
-            List<AnimationWindow> unlockedWindows = GetUnlockedAnimationWindows();
-            if (unlockedWindows.Count == 0)
+            // Get first unlocked window only - Focus() is required for recordable state
+            // but breaks multi-window recording, so we only apply to one window
+            AnimationWindow window = GetFirstUnlockedAnimationWindow();
+            if (window == null)
             {
-                LogDebug("All Animation Windows are locked - skipping clip restore");
+                LogDebug("All windows locked - skipping");
                 return;
             }
 
-            LogDebug($"Restoring preview context for: {clipToProcess.name} (applying to {unlockedWindows.Count} window(s))");
+            LogDebug($"Processing: {clipToProcess.name}");
 
-            // CRITICAL ORDER for recordable state:
-            // 1. Set GameObject context first
-            Selection.activeGameObject = _lastGameObject;
-
-            // 2. Focus each unlocked window to trigger internal state update for recordable
-            //    Then assign the clip to that window
-            //    Note: Only the last-focused window will retain full context for locking
-            //    This is a Unity limitation - single window use works perfectly
-            foreach (AnimationWindow window in unlockedWindows)
+            _isProcessing = true;
+            try
             {
-                window.Focus();
-                window.animationClip = clipToProcess;
-            }
+                // Step 1: Establish GameObject context for animator reference
+                Selection.activeGameObject = _lastGameObject;
 
-            // 3. Set clip as active selection for inspector
-            Selection.activeObject = clipToProcess;
+                // Step 2: Focus window to trigger Unity's internal state update
+                window.Focus();
+                
+                // Step 3: Force Animation window to register GameObject BEFORE setting clip
+                ForceAnimationWindowStateUpdate(window);
+                
+                // Step 4: NOW set the clip - window already knows about GameObject
+                window.animationClip = clipToProcess;
+
+                // Step 5: Set clip as selection while preserving GameObject context
+                Selection.SetActiveObjectWithContext(clipToProcess, _lastGameObject);
+                
+                // Step 6: Cache this clip and window for focus/lock monitoring
+                _lastProcessedClip = clipToProcess;
+                _lastProcessedWindow = window;
+                _lastProcessedWindowWasLocked = IsWindowLocked(window);
+            }
+            finally
+            {
+                _isProcessing = false;
+            }
         }
+
+        #endregion
     }
 }
 #endif
