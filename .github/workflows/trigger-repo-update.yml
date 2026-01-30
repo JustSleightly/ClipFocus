@@ -14,7 +14,7 @@ env:
   repoName: "vpm.sleightly.dev"
   repoBranch: "main"
   workflowName: "build-listing.yml"
-  accessToken: ${{ secrets.VPM_TOKEN }}
+  accessToken: ${{ secrets.VPM_SLEIGHTLY_DEV_TOKEN }}
 
 jobs:
   dispatch:

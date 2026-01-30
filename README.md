@@ -2,7 +2,7 @@
 
 [![GitHub stars](https://img.shields.io/github/stars/JustSleightly/ClipFocus)](https://github.com/JustSleightly/ClipFocus/stargazers) [![GitHub Tags](https://img.shields.io/github/tag/JustSleightly/ClipFocus)](https://github.com/JustSleightly/ClipFocus/tags) [![GitHub release (latest by date including pre-releases)](https://img.shields.io/github/v/release/JustSleightly/ClipFocus?include_prereleases)](https://github.com/JustSleightly/ClipFocus/releases) [![GitHub issues](https://img.shields.io/github/issues/JustSleightly/ClipFocus)](https://github.com/JustSleightly/ClipFocus/issues) [![GitHub last commit](https://img.shields.io/github/last-commit/JustSleightly/ClipFocus)](https://github.com/JustSleightly/ClipFocus/commits/main) [![Discord](https://img.shields.io/discord/780192344800362506)](https://discord.sleightly.dev/)
 
-![CF Script Showcase gif](https://github.com/JustSleightly/ClipFocus/raw/main/Documentation/Gifs/CF%20Script%20Showcase.gif)
+![CF Script Showcase gif](https://github.com/JustSleightly/ClipFocus/raw/main/Documentation~/Gifs/CF%20Script%20Showcase.gif)
 
 **Instant Animation window focusing for Unity's Animator workflow**
 
@@ -17,7 +17,7 @@ Stop clicking through Animation window dropdowns. Click states and BlendTree cli
 - **Zero Setup**: Works immediately after installation
 
 ### Download the **[latest version](https://github.com/JustSleightly/ClipFocus/releases)** for free
-### Add to **[VRChat Creator Companion](https://github.com/JustSleightly/ClipFocus/releases)**
+### Add to **[VRChat Creator Companion](https://vpm.sleightly.dev/)**
 
 ## Quick Start
 
@@ -31,7 +31,8 @@ That's it. No configuration needed.
 ## Technical Details
 
 ### Requirements
-- Tested on Unity 2022.3.22f1 for use with [VRChat](https://creators.vrchat.com/sdk/upgrade/current-unity-version)
+- Tested on Unity 2022.3.22f1 intended for use with [VRChat](https://creators.vrchat.com/sdk/upgrade/current-unity-version)
+  - Does not depend on the VRChat SDK, therefore compatible with Unity standalone
 
 ### Debug Logging
 Enable detailed logging for troubleshooting:
