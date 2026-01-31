@@ -21,10 +21,13 @@ Stop clicking through Animation window dropdowns. Click states and BlendTree cli
 
 ## Quick Start
 
+![CF Animator Setup png](https://github.com/JustSleightly/ClipFocus/raw/main/Documentation~/Images/CF%20Animator%20Setup.png)
+
 1. **Select a GameObject** with an Animator component in the Hierarchy
-2. **Open an Animation window** (`Window > Animation > Animation` or `Right-Click another tab > Add Tab > Animation`)
-3. **Click any Animator State or BlendTree clip** in the Animator window
-4. **Animation window instantly focuses** on that clip - ready to record!
+2. **Add the Animator Controller** to that Animator component that you would like to navigate with ClipFocus
+3. **Open an Animation window** (`Window > Animation > Animation` or `Right-Click another tab > Add Tab > Animation`)
+4. **Click any Animator State or BlendTree clip** in the Animator window
+5. **Animation window instantly focuses** on that clip - ready to record!
 
 That's it. No configuration needed.
 
@@ -38,6 +41,9 @@ That's it. No configuration needed.
 Enable detailed logging for troubleshooting:
 - Menu: `JustSleightly > ClipFocus > Enable Debug Logs`
 - Logs show clip processing, window state changes, and validation messages
+
+> [!NOTE]
+> ClipFocus will send a warning to the console if you do not have a valid Animator component set when clicking on a state or BlendTree clip even without Debug Logs on. This will only occur once per Unity script reload, just to help remind users how to get set up properly.
 
 ## Known Issues
 - When clicking on a BlendTree animation clip, unlocked animation windows will focus on the animation clip "greyed-out" for a frame before visibly flickering into a recordable status.
@@ -57,7 +63,7 @@ Whenever you have difficulty with ClipFocus, try clicking off to another gameobj
 
 ## Acknowledgments
 
-Inspired by [Dreadrith's](https://www.dreadrith.com/) version from Controller Editor before its end of service.
+Inspired by [Dreadrith's](https://www.dreadrith.com/) version from Controller Editor before its end of service
 
 New version originally started by [Pancake992](https://pancake992.gumroad.com/) requested by [Lod](https://lodsgalaxy.com/)
 

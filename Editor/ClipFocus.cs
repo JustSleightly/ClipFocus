@@ -24,6 +24,7 @@ namespace JustSleightly.ClipFocus
         static bool _debugLogsEnabled;
         static bool _isProcessing;
         static EditorWindow _lastFocusedWindow;
+        static bool _userWarningShown;
 
         // Reflection cache for AnimationWindow lock state
         static FieldInfo _lockTrackerField;
@@ -160,6 +161,13 @@ namespace JustSleightly.ClipFocus
             }
         }
 
+        static void ShowUserWarningOnce()
+        {
+            if (_userWarningShown) return;
+            _userWarningShown = true;
+            Debug.LogWarning("<color=yellow>[ClipFocus]</color> No valid Animator component found. Select a GameObject with an Animator component and assign a controller to use ClipFocus.");
+        }
+
         static AnimationWindow[] GetAllAnimationWindows()
         {
             return Resources.FindObjectsOfTypeAll<AnimationWindow>();
@@ -217,6 +225,7 @@ namespace JustSleightly.ClipFocus
             if (animator == null)
             {
                 Log($"GameObject '{_lastGameObject.name}' has no Animator component - cannot apply clip '{clip.name}'");
+                ShowUserWarningOnce();
                 return false;
             }
 
@@ -224,6 +233,7 @@ namespace JustSleightly.ClipFocus
             if (controller == null)
             {
                 Log($"Animator on '{animator.gameObject.name}' has no RuntimeAnimatorController - cannot apply clip '{clip.name}'");
+                ShowUserWarningOnce();
                 return false;
             }
 
