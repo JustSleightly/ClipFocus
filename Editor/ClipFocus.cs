@@ -60,7 +60,7 @@ namespace JustSleightly.ClipFocus
         [MenuItem("JustSleightly/Documentation/ClipFocus", false, 5000)]
         private static void Documentation()
         {
-            Application.OpenURL("https://github.com/JustSleightly/ClipFocus");
+            Application.OpenURL("https://github.sleightly.dev/cf");
         }
 
         #endregion

@@ -1,9 +1,9 @@
 {
   "name": "dev.sleightly.clipfocus",
   "displayName": "JS-ClipFocus",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Shifts Animation Window focus swiftly by clicking clips inside the Animator Window",
-  "url": "https://github.com/JustSleightly/ClipFocus",
+  "url": "https://github.sleightly.dev/cf",
   "vpmDependencies": {
     "com.vrchat.avatars": "^3.10.0"
   },
